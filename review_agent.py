@@ -1,9 +1,12 @@
 import requests
 import re
 from flask import Flask, request, jsonify
-import requests
-import json, os
+import json
+import os
 from dotenv import load_dotenv
+import jwt
+import time
+from github import Github, GithubIntegration
 
 from genai import Client, Credentials
 from genai.extensions.langchain import LangChainEmbeddingsInterface
@@ -27,15 +30,65 @@ load_dotenv()
 
 app = Flask(__name__)
 
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+github_app_id = "916458"
+
+with open(
+    os.path.normpath(
+        os.path.expanduser(
+            "~/Documents/certs/github/isc-pr-review-agent.2024-06-08.private-key.pem"
+        )
+    ),
+    "r",
+) as cert_file:
+    app_key = cert_file.read()
+
+# Create an GitHub integration instance
+git_integration = GithubIntegration(
+    github_app_id,
+    app_key,
+)
+
 REPO_OWNER = "KirtiJha"
-REPO_NAME = "GitPal"
+REPO_NAME = "watsonx-pr-review-agent"
 
 
-def get_commit_details(commit_sha):
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/commits/{commit_sha}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+def create_jwt(app_id, app_key):
+    payload = {
+        "iat": int(time.time()),
+        "exp": int(time.time()) + (10 * 60),
+        "iss": app_id,
+    }
+    token = jwt.encode(payload, app_key, algorithm="RS256")
+    return token
+
+
+def get_installation_token(app_id, app_key, repo_owner, repo_name):
+    jwt_token = create_jwt(app_id, app_key)
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "Accept": "application/vnd.github+json",
+    }
+    url = f"https://api.github.com/app/installations"
     response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    installations = response.json()
+    for installation in installations:
+        if installation["account"]["login"] == repo_owner:
+            installation_id = installation["id"]
+            token_url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
+            token_response = requests.post(token_url, headers=headers)
+            token_response.raise_for_status()
+            return token_response.json()["token"]
+    raise Exception("Installation not found")
+
+
+def get_pull_request_files(pr_number, installation_token):
+    url = (
+        f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/files"
+    )
+    headers = {"Authorization": f"Bearer {installation_token}"}
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
     return response.json()
 
 
@@ -57,8 +110,6 @@ llm = LangChainChatInterface(
         return_options=TextGenerationReturnOptions(input_text=False, input_tokens=True),
     ),
     moderations=ModerationParameters(
-        # Threshold is set to very low level to flag everything (testing purposes)
-        # or set to True to enable HAP with default settings
         hap=ModerationHAP(input=ModerationHAPInput(enabled=True, threshold=0.01))
     ),
 )
@@ -66,7 +117,6 @@ llm = LangChainChatInterface(
 
 def review_code(files_list):
     from langchain_core.messages import HumanMessage, SystemMessage
-    import pprint
 
     prompt = f"Review the following code changes:\n{files_list}"
     result = llm.generate(
@@ -91,18 +141,14 @@ def review_code(files_list):
   Include brief example code snippets in the feedback details for your suggested changes when you're confident your suggestions are improvements. Use the same programming language as the file under review.
   If there are multiple improvements you suggest in the feedback details, use an ordered list to indicate the priority of the changes.
 
-  Format the response in a valid JSON format as a list of feedbacks, where the value is an object containing the filename ("fileName"),  risk score ("riskScore") and the feedback ("details"). The schema of the JSON feedback object must be:
-  {
-    "fileName": {
-      "type": "string"
-    },
-    "riskScore": {
-      "type": "number"
-    },
-    "details": {
-      "type": "string"
+  Format the response in a valid JSON format as a list of feedbacks:
+  [
+    {
+      "fileName": "string",
+      "riskScore": "number",
+      "details": "string"
     }
-  }
+  ]
 
   The filenames and file contents to review are provided below as a list of JSON objects:
   """,
@@ -117,11 +163,12 @@ def review_code(files_list):
 
 
 def extract_json_from_review(feedback_string):
-    match = re.search(r"```(.*?)```", feedback_string, re.DOTALL)
-    if match:
-        json_string = match.group(1).strip()
-        return json.loads(json_string)
-    return []
+    try:
+        json_data = re.search(r"\[\s*{.*}\s*\]", feedback_string, re.DOTALL).group(0)
+        return json.loads(json_data)
+    except (json.JSONDecodeError, AttributeError) as e:
+        print(f"Failed to decode JSON from feedback string: {e}")
+        return []
 
 
 def format_feedback_as_markdown(feedback):
@@ -134,33 +181,37 @@ def format_feedback_as_markdown(feedback):
     return markdown_comment
 
 
-def post_review_comment(body, commit_sha):
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/commits/{commit_sha}/comments"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+def post_review_comment(body, pr_number, installation_token):
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/issues/{pr_number}/comments"
+    headers = {"Authorization": f"Bearer {installation_token}"}
     data = {"body": body}
     response = requests.post(url, json=data, headers=headers)
+    response.raise_for_status()
     return response.json()
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
-    if "commits" in data:
-        for commit in data["commits"]:
-            commit_sha = commit["id"]
-            commit_details = get_commit_details(commit_sha)
-            diff = commit_details["files"]
-            files_list = [
-                {"filename": file["filename"], "patch": file["patch"]} for file in diff
-            ]
-            feedback_string = review_code(files_list)
-            print(f"feedback string - {feedback_string}")
-            feedback = extract_json_from_review(feedback_string)
-            print(f"feedback - {feedback}")
+    installation_token = get_installation_token(
+        github_app_id, app_key, REPO_OWNER, REPO_NAME
+    )
+    if "pull_request" in data:
+        pr_number = data["pull_request"]["number"]
+        pr_files = get_pull_request_files(pr_number, installation_token)
+        files_list = [
+            {"filename": file["filename"], "patch": file["patch"]} for file in pr_files
+        ]
+        feedback_string = review_code(files_list)
+        print(f"feedback string - {feedback_string}")
+        feedback = extract_json_from_review(feedback_string)
+        print(f"feedback - {feedback}")
+        if feedback:
             review_comment = format_feedback_as_markdown(feedback)
             print(f"review comment - {review_comment}")
-            # pr_number = data['pull_request']['number']
-            post_review_comment(review_comment, commit_sha)
+            post_review_comment(review_comment, pr_number, installation_token)
+        else:
+            print("No feedback to post.")
     return jsonify({"status": "reviewed"})
 
 
