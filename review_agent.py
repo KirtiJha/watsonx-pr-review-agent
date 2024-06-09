@@ -63,6 +63,7 @@ def create_jwt(app_id, app_key):
     return token
 
 
+# get installation token
 def get_installation_token(app_id, app_key, repo_owner, repo_name):
     jwt_token = create_jwt(app_id, app_key)
     headers = {
