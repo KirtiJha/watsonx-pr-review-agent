@@ -145,10 +145,8 @@ def review_code(files_list):
   [
     {
       "fileName": "string",
-      "line": "number",
       "riskScore": "number",
-      "details": "string",
-      "suggestedCode": "string"
+      "details": "string"
     }
   ]
 
@@ -175,109 +173,21 @@ def extract_json_from_review(feedback_string):
         return []
 
 
-# def format_feedback_as_markdown(feedback):
-#     markdown_comment = "Here is the review of the code changes:\n\n"
-#     for item in feedback:
-#         markdown_comment += f"### File: {item['fileName']}\n"
-#         markdown_comment += f"- **Risk Score**: {item['riskScore']}\n"
-#         markdown_comment += f"- **Details**: {item['details']}\n\n"
-#     markdown_comment += "Let me know if you'd like me to review more code changes!"
-#     return markdown_comment
+def format_feedback_as_markdown(feedback):
+    markdown_comment = "Here is the review of the code changes:\n\n"
+    for item in feedback:
+        markdown_comment += f"### File: {item['fileName']}\n"
+        markdown_comment += f"- **Risk Score**: {item['riskScore']}\n"
+        markdown_comment += f"- **Details**: {item['details']}\n\n"
+    markdown_comment += "Let me know if you'd like me to review more code changes!"
+    return markdown_comment
 
 
-# def post_review_comment(body, pr_number, installation_token):
-#     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/issues/{pr_number}/comments"
-#     headers = {"Authorization": f"Bearer {installation_token}"}
-#     data = {"body": body}
-#     response = requests.post(url, json=data, headers=headers)
-#     response.raise_for_status()
-#     return response.json()
-
-
-def get_pr_diff(pr_number, installation_token):
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}"
-    headers = {
-        "Authorization": f"Bearer {installation_token}",
-        "Accept": "application/vnd.github.v3.diff",
-    }
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-    return response.text
-
-
-def get_commit_id(pr_number, installation_token):
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/commits"
+def post_review_comment(body, pr_number, installation_token):
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/issues/{pr_number}/comments"
     headers = {"Authorization": f"Bearer {installation_token}"}
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-    commits = response.json()
-    # Return the last commit id (most recent)
-    return commits[-1]["sha"]
-
-
-def find_position_in_diff(diff, file_name, target_line_number):
-    file_diff_started = False
-    current_line_number = None
-    position = 0
-
-    for line in diff.splitlines():
-        if line.startswith(f"diff --git a/{file_name} b/{file_name}"):
-            file_diff_started = True
-        elif file_diff_started and line.startswith("@@ "):
-            # Hunk header
-            hunk_header = line
-            # Extract the starting line number for the changes in the file being diffed
-            parts = hunk_header.split(" ")
-            old_file_range = parts[1]
-            new_file_range = parts[2]
-
-            # Get the starting line number for the new file part of the hunk
-            start_line_number = int(new_file_range.split(",")[0][1:])
-            current_line_number = start_line_number
-
-        elif file_diff_started and current_line_number is not None:
-            if line.startswith("+"):
-                if current_line_number == target_line_number:
-                    return position
-                current_line_number += 1
-            elif not line.startswith("-"):
-                current_line_number += 1
-
-        position += 1
-
-    return None
-
-
-def post_line_comment(
-    pr_number, installation_token, file_name, line_number, comment, suggested_code
-):
-    # Get the commit ID and diff
-    commit_id = get_commit_id(pr_number, installation_token)
-    diff = get_pr_diff(pr_number, installation_token)
-
-    # Find the position in the diff
-    position = find_position_in_diff(diff, file_name, line_number)
-
-    if position is None:
-        print(f"Could not find the position for {file_name} at line {line_number}")
-        return
-
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/comments"
-    headers = {"Authorization": f"Bearer {installation_token}"}
-
-    # Build the comment body with a diff suggestion if applicable
-    if suggested_code:
-        body += f"\n\n```suggestion\n{suggested_code}\n```"
-
-    data = {
-        "body": body,
-        "commit_id": commit_id,
-        "path": file_name,
-        "position": position,
-    }
-    print(f"Posting comment: {data}")
+    data = {"body": body}
     response = requests.post(url, json=data, headers=headers)
-    print(f"Response: {response.status_code} - {response.text}")
     response.raise_for_status()
     return response.json()
 
@@ -285,7 +195,6 @@ def post_line_comment(
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
-
     installation_token = get_installation_token(
         github_app_id, app_key, REPO_OWNER, REPO_NAME
     )
@@ -300,15 +209,9 @@ def webhook():
         feedback = extract_json_from_review(feedback_string)
         print(f"feedback - {feedback}")
         if feedback:
-            for item in feedback:
-                post_line_comment(
-                    pr_number,
-                    installation_token,
-                    item["fileName"],
-                    item["line"],
-                    item["details"],
-                    item.get("suggestedCode", ""),
-                )
+            review_comment = format_feedback_as_markdown(feedback)
+            print(f"review comment - {review_comment}")
+            post_review_comment(review_comment, pr_number, installation_token)
         else:
             print("No feedback to post.")
     return jsonify({"status": "reviewed"})
