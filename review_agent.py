@@ -145,8 +145,10 @@ def review_code(files_list):
   [
     {
       "fileName": "string",
+      "line": "number",
       "riskScore": "number",
-      "details": "string"
+      "details": "string",
+      "suggestedCode": "string"
     }
   ]
 
@@ -173,20 +175,37 @@ def extract_json_from_review(feedback_string):
         return []
 
 
-def format_feedback_as_markdown(feedback):
-    markdown_comment = "Here is the review of the code changes:\n\n"
-    for item in feedback:
-        markdown_comment += f"### File: {item['fileName']}\n"
-        markdown_comment += f"- **Risk Score**: {item['riskScore']}\n"
-        markdown_comment += f"- **Details**: {item['details']}\n\n"
-    markdown_comment += "Let me know if you'd like me to review more code changes!"
-    return markdown_comment
+# def format_feedback_as_markdown(feedback):
+#     markdown_comment = "Here is the review of the code changes:\n\n"
+#     for item in feedback:
+#         markdown_comment += f"### File: {item['fileName']}\n"
+#         markdown_comment += f"- **Risk Score**: {item['riskScore']}\n"
+#         markdown_comment += f"- **Details**: {item['details']}\n\n"
+#     markdown_comment += "Let me know if you'd like me to review more code changes!"
+#     return markdown_comment
 
 
-def post_review_comment(body, pr_number, installation_token):
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/issues/{pr_number}/comments"
+# def post_review_comment(body, pr_number, installation_token):
+#     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/issues/{pr_number}/comments"
+#     headers = {"Authorization": f"Bearer {installation_token}"}
+#     data = {"body": body}
+#     response = requests.post(url, json=data, headers=headers)
+#     response.raise_for_status()
+#     return response.json()
+
+
+def post_line_comment(
+    pr_number, installation_token, file_name, line, comment, suggested_code
+):
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/comments"
     headers = {"Authorization": f"Bearer {installation_token}"}
-    data = {"body": body}
+
+    # Build the comment body with a diff suggestion if applicable
+    body = f"{comment}"
+    if suggested_code:
+        body += f"\n\n```suggestion\n{suggested_code}\n```"
+
+    data = {"body": body, "path": file_name, "line": line, "side": "RIGHT"}
     response = requests.post(url, json=data, headers=headers)
     response.raise_for_status()
     return response.json()
@@ -207,11 +226,23 @@ def webhook():
         feedback_string = review_code(files_list)
         print(f"feedback string - {feedback_string}")
         feedback = extract_json_from_review(feedback_string)
-        print(f"feedback - {feedback}")
+        # print(f"feedback - {feedback}")
+        # if feedback:
+        #     review_comment = format_feedback_as_markdown(feedback)
+        #     print(f"review comment - {review_comment}")
+        #     post_review_comment(review_comment, pr_number, installation_token)
+        # else:
+        #     print("No feedback to post.")
         if feedback:
-            review_comment = format_feedback_as_markdown(feedback)
-            print(f"review comment - {review_comment}")
-            post_review_comment(review_comment, pr_number, installation_token)
+            for item in feedback:
+                post_line_comment(
+                    pr_number,
+                    installation_token,
+                    item["fileName"],
+                    item["line"],
+                    item["details"],
+                    item.get("suggestedCode", ""),
+                )
         else:
             print("No feedback to post.")
     return jsonify({"status": "reviewed"})
