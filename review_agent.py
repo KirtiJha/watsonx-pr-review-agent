@@ -206,7 +206,9 @@ def post_line_comment(
         body += f"\n\n```suggestion\n{suggested_code}\n```"
 
     data = {"body": body, "path": file_name, "line": line, "side": "RIGHT"}
+    print(f"Posting comment: {data}")
     response = requests.post(url, json=data, headers=headers)
+    print(f"Response: {response.status_code} - {response.text}")
     response.raise_for_status()
     return response.json()
 
@@ -226,7 +228,7 @@ def webhook():
         feedback_string = review_code(files_list)
         print(f"feedback string - {feedback_string}")
         feedback = extract_json_from_review(feedback_string)
-        # print(f"feedback - {feedback}")
+        print(f"feedback - {feedback}")
         # if feedback:
         #     review_comment = format_feedback_as_markdown(feedback)
         #     print(f"review comment - {review_comment}")
