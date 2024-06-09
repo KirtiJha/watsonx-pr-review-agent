@@ -30,14 +30,10 @@ load_dotenv()
 
 app = Flask(__name__)
 
-github_app_id = "916458"
+github_app_id = os.getenv("GITHUB_APP_ID")
 
 with open(
-    os.path.normpath(
-        os.path.expanduser(
-            "~/Documents/certs/github/isc-pr-review-agent.2024-06-08.private-key.pem"
-        )
-    ),
+    os.path.normpath(os.path.expanduser(os.getenv("GITHUB_CERT_PATH"))),
     "r",
 ) as cert_file:
     app_key = cert_file.read()
@@ -48,8 +44,8 @@ git_integration = GithubIntegration(
     app_key,
 )
 
-REPO_OWNER = "KirtiJha"
-REPO_NAME = "watsonx-pr-review-agent"
+REPO_OWNER = os.getenv("USER")
+REPO_NAME = os.getenv("REPO_NAME")
 
 
 def create_jwt(app_id, app_key):
@@ -93,7 +89,7 @@ def get_pull_request_files(pr_number, installation_token):
 
 
 credentials = Credentials(
-    api_key="pak-VcI5V05aaf42FbLqO7Fc6FR7KFSz2Gmap97DO1y3-I8",
+    api_key=os.getenv("GENAI_API_KEY"),
     api_endpoint="https://bam-api.res.ibm.com/v2/text/chat?version=2024-03-19",
 )
 client = Client(credentials=credentials)
