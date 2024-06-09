@@ -165,6 +165,8 @@ def review_code(files_list):
 def extract_json_from_review(feedback_string):
     try:
         json_data = re.search(r"\[\s*{.*}\s*\]", feedback_string, re.DOTALL).group(0)
+        # Remove any non-printable control characters
+        json_data = re.sub(r"[\x00-\x1F\x7F]", "", json_data)
         return json.loads(json_data)
     except (json.JSONDecodeError, AttributeError) as e:
         print(f"Failed to decode JSON from feedback string: {e}")
