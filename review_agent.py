@@ -194,9 +194,62 @@ def extract_json_from_review(feedback_string):
 #     return response.json()
 
 
+def get_pr_diff(pr_number, installation_token):
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}"
+    headers = {
+        "Authorization": f"Bearer {installation_token}",
+        "Accept": "application/vnd.github.v3.diff",
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return response.text
+
+
+def get_commit_id(pr_number, installation_token):
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/commits"
+    headers = {"Authorization": f"Bearer {installation_token}"}
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    commits = response.json()
+    # Return the last commit id (most recent)
+    return commits[-1]["sha"]
+
+
+def find_position_in_diff(diff, file_name, line_number):
+    position = 0
+    file_diff_started = False
+    for line in diff.splitlines():
+        if line.startswith(f"diff --git a/{file_name} b/{file_name}"):
+            file_diff_started = True
+        elif file_diff_started and line.startswith("@@ "):
+            # Position header
+            hunk_header = line
+            # Extract the starting line number for the changes
+            start_line_number = int(hunk_header.split(" ")[2].split(",")[0][1:])
+            if (
+                start_line_number
+                <= line_number
+                < start_line_number + int(hunk_header.split(" ")[2].split(",")[1])
+            ):
+                return position
+        position += 1
+    return None
+
+
 def post_line_comment(
-    pr_number, installation_token, file_name, line, comment, suggested_code
+    pr_number, installation_token, file_name, line_number, comment, suggested_code
 ):
+    # Get the commit ID and diff
+    commit_id = get_commit_id(pr_number, installation_token)
+    diff = get_pr_diff(pr_number, installation_token)
+
+    # Find the position in the diff
+    position = find_position_in_diff(diff, file_name, line_number)
+
+    if position is None:
+        print(f"Could not find the position for {file_name} at line {line_number}")
+        return
+
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/comments"
     headers = {"Authorization": f"Bearer {installation_token}"}
 
@@ -205,7 +258,12 @@ def post_line_comment(
     if suggested_code:
         body += f"\n\n```suggestion\n{suggested_code}\n```"
 
-    data = {"body": body, "path": file_name, "line": line, "side": "RIGHT"}
+    data = {
+        "body": body,
+        "commit_id": commit_id,
+        "path": file_name,
+        "position": position,
+    }
     print(f"Posting comment: {data}")
     response = requests.post(url, json=data, headers=headers)
     print(f"Response: {response.status_code} - {response.text}")
