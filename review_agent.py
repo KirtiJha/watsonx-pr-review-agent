@@ -33,16 +33,14 @@ app = Flask(__name__)
 github_app_id = os.getenv("GITHUB_APP_ID")
 
 with open(
-    os.path.normpath(os.path.expanduser(os.getenv("GITHUB_CERT_PATH"))),
+    os.path.normpath(
+        os.path.expanduser(
+            "~/Documents/certs/github/isc-pr-review-agent.2024-06-08.private-key.pem"
+        )
+    ),
     "r",
 ) as cert_file:
     app_key = cert_file.read()
-
-# Create an GitHub integration instance
-git_integration = GithubIntegration(
-    github_app_id,
-    app_key,
-)
 
 REPO_OWNER = os.getenv("USER")
 REPO_NAME = os.getenv("REPO_NAME")
