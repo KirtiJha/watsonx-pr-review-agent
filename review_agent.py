@@ -52,6 +52,7 @@ REPO_OWNER = "KirtiJha"
 REPO_NAME = "watsonx-pr-review-agent"
 
 
+# create jwt token
 def create_jwt(app_id, app_key):
     payload = {
         "iat": int(time.time()),
