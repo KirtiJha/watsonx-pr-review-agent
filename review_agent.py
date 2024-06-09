@@ -254,7 +254,7 @@ def post_line_comment(
     headers = {"Authorization": f"Bearer {installation_token}"}
 
     # Build the comment body with a diff suggestion if applicable
-    body = f"{comment}"
+    body = f"BOT_COMMENT: {comment}"
     if suggested_code:
         body += f"\n\n```suggestion\n{suggested_code}\n```"
 
@@ -274,6 +274,13 @@ def post_line_comment(
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
+
+    # Ignore bot comments to prevent recursion
+    if "comment" in data and "body" in data["comment"]:
+        if data["comment"]["body"].startswith("BOT_COMMENT:"):
+            print("Ignoring bot's own comment to prevent recursion.")
+            return jsonify({"status": "ignored bot comment"})
+
     installation_token = get_installation_token(
         github_app_id, app_key, REPO_OWNER, REPO_NAME
     )
@@ -287,12 +294,6 @@ def webhook():
         print(f"feedback string - {feedback_string}")
         feedback = extract_json_from_review(feedback_string)
         print(f"feedback - {feedback}")
-        # if feedback:
-        #     review_comment = format_feedback_as_markdown(feedback)
-        #     print(f"review comment - {review_comment}")
-        #     post_review_comment(review_comment, pr_number, installation_token)
-        # else:
-        #     print("No feedback to post.")
         if feedback:
             for item in feedback:
                 post_line_comment(
