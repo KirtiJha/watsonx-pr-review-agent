@@ -215,24 +215,36 @@ def get_commit_id(pr_number, installation_token):
     return commits[-1]["sha"]
 
 
-def find_position_in_diff(diff, file_name, line_number):
-    position = 0
+def find_position_in_diff(diff, file_name, target_line_number):
     file_diff_started = False
+    current_line_number = None
+    position = 0
+
     for line in diff.splitlines():
         if line.startswith(f"diff --git a/{file_name} b/{file_name}"):
             file_diff_started = True
         elif file_diff_started and line.startswith("@@ "):
-            # Position header
+            # Hunk header
             hunk_header = line
-            # Extract the starting line number for the changes
-            start_line_number = int(hunk_header.split(" ")[2].split(",")[0][1:])
-            if (
-                start_line_number
-                <= line_number
-                < start_line_number + int(hunk_header.split(" ")[2].split(",")[1])
-            ):
-                return position
+            # Extract the starting line number for the changes in the file being diffed
+            parts = hunk_header.split(" ")
+            old_file_range = parts[1]
+            new_file_range = parts[2]
+
+            # Get the starting line number for the new file part of the hunk
+            start_line_number = int(new_file_range.split(",")[0][1:])
+            current_line_number = start_line_number
+
+        elif file_diff_started and current_line_number is not None:
+            if line.startswith("+"):
+                if current_line_number == target_line_number:
+                    return position
+                current_line_number += 1
+            elif not line.startswith("-"):
+                current_line_number += 1
+
         position += 1
+
     return None
 
 
@@ -254,7 +266,6 @@ def post_line_comment(
     headers = {"Authorization": f"Bearer {installation_token}"}
 
     # Build the comment body with a diff suggestion if applicable
-    body = f"BOT_COMMENT: {comment}"
     if suggested_code:
         body += f"\n\n```suggestion\n{suggested_code}\n```"
 
@@ -274,12 +285,6 @@ def post_line_comment(
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
-
-    # Ignore bot comments to prevent recursion
-    if "comment" in data and "body" in data["comment"]:
-        if data["comment"]["body"].startswith("BOT_COMMENT:"):
-            print("Ignoring bot's own comment to prevent recursion.")
-            return jsonify({"status": "ignored bot comment"})
 
     installation_token = get_installation_token(
         github_app_id, app_key, REPO_OWNER, REPO_NAME
